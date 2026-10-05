@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bingo with Friends</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+:root{--felt:#0f3d3a;--felt2:#17524e;--paper:#f4f8f5;--ink:#16302d;--dab:#d62a6f;--gold:#f2b632;--mut:#8fb3ad}
+*{box-sizing:border-box;margin:0}
+body{background:var(--felt);color:#fff;font:500 16px Fredoka,system-ui,sans-serif;min-height:100vh;display:flex;justify-content:center;padding:16px}
+#app{width:100%;max-width:440px}
+h1{font-size:44px;text-align:center;margin:18px 0 2px}
+.s{color:var(--mut);text-align:center;margin:4px 0 14px}
+.box{background:var(--felt2);border-radius:14px;padding:14px;margin-bottom:12px}
+input{width:100%;padding:12px;border-radius:10px;border:2px solid var(--felt);background:var(--paper);color:var(--ink);font:inherit;font-size:17px;margin-bottom:8px}
+button{width:100%;padding:13px;border:0;border-radius:10px;background:var(--gold);color:var(--ink);font:inherit;font-weight:700;font-size:17px;margin-top:8px;cursor:pointer}
+button.g{background:var(--felt);color:#fff;border:2px solid var(--mut)}
+button:disabled{opacity:.4;cursor:default}
+button:focus-visible,.grid div:focus-visible{outline:3px solid #fff}
+.row{display:flex;gap:8px}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:var(--paper);padding:8px;border-radius:14px}
+.grid div{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:var(--ink);border-radius:10px;cursor:pointer;user-select:none;border:2px solid #d3e0da}
+.grid.sm{background:var(--felt2);margin-top:10px}
+.grid.sm div{font-size:15px;aspect-ratio:auto;padding:6px 0;color:#fff;border-color:var(--felt)}
+.grid.sm .used{opacity:.3}
+.grid .s1{border-color:var(--dab);background:#fde3ee}
+.grid .m{background:radial-gradient(circle,var(--dab) 62%,transparent 64%);color:#fff;border-color:transparent}
+.grid .d{box-shadow:inset 0 0 0 3px var(--gold)}
+.grid .can{border-color:var(--ink);animation:p 1s infinite alternate}
+@keyframes p{to{background:#dff1e8}}
+@media(prefers-reduced-motion:reduce){.grid .can{animation:none}}
+.bar{height:10px;background:var(--felt2);border-radius:8px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--gold);transition:width 1s linear}
+.bar i.low{background:var(--dab)}
+.pl{display:flex;justify-content:space-between;align-items:center;padding:5px 0}
+.let b{margin-left:3px;color:#3a6d67;font-size:20px}.let b.on{color:var(--gold)}
+.code{font-size:46px;letter-spacing:6px;text-align:center;font-weight:700}
+.big{font-size:30px;color:var(--gold)}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}.chips span{background:var(--felt);border-radius:8px;padding:2px 8px}
+</style></head>
+<body><div id="app"></div>
+<script>
+const $=s=>document.querySelector(s),A=$('#app');
+const esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
+const shuf=a=>{for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a};
+const nums=()=>shuf([...Array(25).keys()].map(x=>x+1));
+const R=[0,1,2,3,4];
+const L=R.flatMap(i=>[R.map(j=>i*5+j),R.map(j=>j*5+i)]).concat([[0,6,12,18,24],[4,8,12,16,20]]);
+const lines=(c,called)=>L.filter(l=>l.every(i=>called.includes(c[i]))).length;
+let peer,conn,S=null,me=0,isHost=false,G=null,name='',room='',err='',card=Array(25).fill(null),ready=false,sel=null;
+const code0=(new URLSearchParams(location.search).get('room')||'').toUpperCase();
+
+/* ---------- HOST (runs all game logic) ---------- */
+function fix(c){const seen=new Set();const o=(Array.isArray(c)?c:[]).slice(0,25).map(x=>(seen.has(x)||!(x>=1&&x<=25))?null:(seen.add(x),x));while(o.length<25)o.push(null);const miss=shuf(nums().filter(x=>!seen.has(x)));return o.map(x=>x||miss.pop())}
+function pub(){return{phase:G.phase,called:G.called,turn:G.turn,last:G.last,winners:G.winners,t:G.t,ps:G.players.map(p=>({n:p.name,l:G.phase=='lobby'?0:lines(p.card,G.called),r:p.ready,g:p.gone}))}}
+function bc(){const b=pub();G.players.forEach((p,i)=>{const s={...b,me:i,card:p.card};if(i){if(p.conn.open)p.conn.send({k:'s',s})}else recv(s)})}
+function tick(){G.players.forEach((p,i)=>{if(i){if(p.conn.open)p.conn.send({k:'t',t:G.t})}else setT(G.t)})}
+function startBuild(){G.phase='build';G.t=60;G.called=[];G.last=null;G.winners=[];G.players=G.players.filter(p=>!p.gone);G.players.forEach(p=>{p.card=nums();p.ready=false});bc()}
+function startPlay(){G.players.forEach(p=>p.card=fix(p.card));G.phase='play';G.turn=Math.random()*G.players.length|0;G.t=15;bc()}
+function pick(n){const who=G.turn;G.called.push(n);G.last=n;
+ const w=G.players.map((p,i)=>i).filter(i=>lines(G.players[i].card,G.called)>=5);
+ if(w.length){G.winners=w.includes(who)?[who]:w;G.phase='over'}
+ else{do{G.turn=(G.turn+1)%G.players.length}while(G.players[G.turn].gone);G.t=15}
+ bc()}
+function act(i,m){const p=G.players[i];
+ if(m.k=='c'&&G.phase=='build'){p.card=m.card;p.ready=!!m.r&&Array.isArray(m.card)&&m.card.every(Boolean);bc();if(G.players.every(q=>q.ready||q.gone))startPlay()}
+ else if(m.k=='p'&&G.phase=='play'&&G.turn==i&&m.n>=1&&m.n<=25&&!G.called.includes(m.n))pick(m.n);
+ else if(m.k=='go'&&i==0&&G.phase=='lobby'&&G.players.length>1)startBuild();
+ else if(m.k=='again'&&i==0&&G.phase=='over')startBuild()}
+setInterval(()=>{if(!isHost||!G)return;
+ if(G.phase=='build'||G.phase=='play'){
+  if(G.players.filter(p=>!p.gone).length<2){G.winners=[0];G.phase='over';return bc()}}
+ if(G.phase=='build'){if(--G.t<=0)startPlay();else tick()}
+ else if(G.phase=='play'){if(G.players[G.turn].gone||--G.t<=0)pick(nums().find(x=>!G.called.includes(x)));else tick()}},1000);
+function host(){isHost=true;room=Math.random().toString(36).slice(2,7).toUpperCase();
+ peer=new Peer('bingo-'+room);
+ peer.on('open',()=>{G={phase:'lobby',players:[{name,card:[],ready:false}],called:[],turn:0,t:0,last:null,winners:[]};bc()});
+ peer.on('connection',c=>{
+  c.on('data',m=>{const i=G.players.findIndex(p=>p.conn===c);
+   if(m.k=='j'&&i<0){
+    if(G.phase!='lobby'||G.players.length>=4){c.send({k:'e',e:G.phase!='lobby'?'That game has already started.':'Room is full (max 4 players).'});return}
+    G.players.push({name:String(m.n||'Player').slice(0,12),conn:c,card:[],ready:false});bc()}
+   else if(i>0)act(i,m)});
+  c.on('close',()=>{const i=G.players.findIndex(p=>p.conn===c);if(i<1)return;if(G.phase=='lobby')G.players.splice(i,1);else G.players[i].gone=true;bc()})});
+ peer.on('error',e=>{if(e.type=='unavailable-id'){peer.destroy();host()}else fail('Could not create room ('+e.type+'). Check your connection.')})}
+
+/* ---------- CLIENT ---------- */
+function join(c){isHost=false;room=c.toUpperCase();peer=new Peer();
+ peer.on('open',()=>{conn=peer.connect('bingo-'+room,{reliable:true});
+  conn.on('open',()=>conn.send({k:'j',n:name}));
+  conn.on('data',m=>{if(m.k=='s')recv(m.s);else if(m.k=='t')setT(m.t);else if(m.k=='e')fail(m.e)});
+  conn.on('close',()=>fail('The host left the game.'))});
+ peer.on('error',e=>fail(e.type=='peer-unavailable'?'Room not found. Check the code.':'Connection problem ('+e.type+').'));
+ setTimeout(()=>{if(!S&&peer)fail('Could not connect. Check the code and try again.')},12000)}
+const send=m=>isHost?act(0,m):conn&&conn.open&&conn.send(m);
+function fail(m){err=m;S=null;G=null;isHost=false;try{peer.destroy()}catch(e){}peer=null;render()}
+function recv(s){const pp=S&&S.phase,pt=S&&S.turn;S=s;me=s.me;
+ if(s.phase=='build'&&pp!='build'){card=s.card.slice();ready=false;sel=null}
+ if(s.phase=='play'&&s.turn==me&&(pp!='play'||pt!=s.turn)&&navigator.vibrate)navigator.vibrate(200);
+ render()}
+function setT(t){if(!S)return;S.t=t;const m=S.phase=='build'?60:15,e=$('#tm'),b=$('#bar');if(e)e.textContent=t+'s';if(b){b.style.width=t/m*100+'%';b.className=t<=5?'low':''}}
+const push=()=>{send({k:'c',card:card.slice(),r:ready});render()};
+
+/* ---------- UI ---------- */
+function render(){
+ if(!S){A.innerHTML=`<h1>🎯 Bingo</h1><p class=s>2–4 players. Build a card, call numbers, race to five lines.</p>
+ <div class=box>${err?`<p style="color:#ff9ab9;margin-bottom:8px">${esc(err)}</p>`:''}<input id=nm placeholder="Your name" maxlength=12 value="${esc(name)}"><button data-a=create>Create a room</button></div>
+ <div class=box><input id=cd placeholder="Room code" maxlength=5 value="${esc(code0)}" style="text-transform:uppercase"><button class=g data-a=join>Join a room</button></div>`;return}
+ const ph=S.phase,plist=S.ps.map((p,i)=>`<div class=pl><span>${ph=='play'&&i==S.turn?'▶ ':''}${esc(p.n)}${i==me?' (you)':''}${p.g?' – left':''}${ph=='build'&&p.r?' ✔':''}</span>${ph=='lobby'?'':`<span class=let>${[...'BINGO'].map((c,k)=>`<b class="${k<p.l?'on':''}">${c}</b>`).join('')}</span>`}</div>`).join('');
+ const T=l=>`<div class=bar><i id=bar></i></div><p class=s style="margin:6px 0 12px"><b id=tm></b> · ${l}</p>`;
+ if(ph=='lobby'){
+  const link=location.origin+location.pathname+'?room='+room;
+  A.innerHTML=`<h1>Room</h1><div class=box><div class=code>${room}</div><button class=g data-a=copy data-v="${esc(link)}">Copy invite link</button></div>
+  <div class=box>${plist}</div>`+(me==0?`<button data-a=go ${S.ps.length<2?'disabled':''}>Start game (${S.ps.length}/4)</button>`:`<p class=s>Waiting for the host to start…</p>`);return}
+ if(ph=='build'){
+  const full=card.every(Boolean);
+  A.innerHTML=T(ready?'Waiting for others…':'Build your card: tap a cell, then a number. Tap two cells to swap.')+
+  `<div class=grid>${card.map((n,i)=>`<div data-a=cell data-v=${i} class="${sel==i?'s1':''}">${n||''}</div>`).join('')}</div>`+
+  (ready?'':`<div class="grid sm">${R.concat([5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]).map(k=>`<div data-a=num data-v=${k+1} class="${card.includes(k+1)?'used':''}">${k+1}</div>`).join('')}</div>
+  <div class=row><button class=g data-a=shuf>🎲 Shuffle</button><button class=g data-a=clr>Clear</button></div>`)+
+  `<button data-a=rdy ${full?'':'disabled'}>${ready?'Edit card':"I'm ready"}</button><div class=box style="margin-top:12px">${plist}</div>`;setT(S.t);return}
+ const over=ph=='over',mine=S.turn==me&&!over,d=new Set(L.filter(l=>l.every(i=>S.called.includes(S.card[i]))).flat());
+ const head=over?`<div class=box style="text-align:center;font-size:24px">${S.winners.includes(me)?'🏆 You win!':'🏁 '+S.winners.map(i=>esc(S.ps[i].n)).join(' & ')+' wins!'}</div>`
+  :T(mine?'Your turn. Tap a number on your card.':esc(S.ps[S.turn].n)+' is choosing…');
+ A.innerHTML=head+`<div class=box>${plist}</div>
+ <div class=grid>${S.card.map((n,i)=>{const c=S.called.includes(n);return`<div data-a=pick data-v=${n} class="${c?'m':''} ${d.has(i)?'d':''} ${mine&&!c?'can':''}">${n}</div>`}).join('')}</div>
+ <div class=box style="margin-top:12px">Last called: <b class=big>${S.last??'–'}</b><div class=chips>${S.called.map(n=>`<span>${n}</span>`).join('')}</div></div>`+
+ (over?(me==0?`<button data-a=again>Play again</button>`:`<p class=s>Waiting for the host to start a rematch…</p>`):'');
+ if(!over)setT(S.t)}
+
+A.onclick=e=>{const t=e.target.closest('[data-a]');if(!t||t.disabled)return;const a=t.dataset.a,v=t.dataset.v,n=+v;
+ if(a=='create'){name=$('#nm').value.trim()||'Host';err='';host()}
+ else if(a=='join'){name=$('#nm').value.trim()||'Player';const c=$('#cd').value.trim();if(c){err='';join(c)}}
+ else if(a=='go')send({k:'go'});
+ else if(a=='again')send({k:'again'});
+ else if(a=='copy'){if(navigator.clipboard)navigator.clipboard.writeText(v);t.textContent='Copied ✔'}
+ else if(a=='rdy'){ready=!ready;sel=null;push()}
+ else if(S&&S.phase=='build'&&!ready){
+  if(a=='cell'){if(sel==null)sel=n;else if(sel==n)sel=null;else{[card[sel],card[n]]=[card[n],card[sel]];sel=null;push();return}render()}
+  else if(a=='num'&&sel!=null){const j=card.indexOf(n),w=card[sel];if(j>=0)card[j]=w;card[sel]=n;const f=card.indexOf(null);sel=(w==null&&f>=0)?f:null;push()}
+  else if(a=='shuf'){card=nums();sel=null;push()}
+  else if(a=='clr'){card=Array(25).fill(null);sel=0;push()}}
+ else if(a=='pick'&&S&&S.phase=='play'&&S.turn==me&&!S.called.includes(n))send({k:'p',n})};
+render();
+</script></body></html>
