@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bingo with Friends</title>
+<title>Game Night: Bingo &amp; Barrier</title>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
@@ -19,7 +19,7 @@ input:focus-visible{outline:3px solid var(--gold)}
 button{width:100%;padding:13px;border:0;border-radius:10px;background:var(--gold);color:var(--ink);font:inherit;font-weight:700;font-size:17px;margin-top:8px;cursor:pointer}
 button.g{background:var(--felt);color:#fff;border:2px solid var(--mut)}
 button:disabled{opacity:.4;cursor:default}
-button:focus-visible,.grid div:focus-visible{outline:3px solid #fff}
+button:focus-visible,.grid div:focus-visible,.bd div:focus-visible{outline:3px solid #fff}
 .row{display:flex;gap:8px}
 .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:var(--paper);padding:8px;border-radius:14px}
 .grid div{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:var(--ink);border-radius:10px;cursor:pointer;user-select:none;border:2px solid #d3e0da}
@@ -51,6 +51,17 @@ button.g.on{background:var(--gold);color:var(--ink);border-color:var(--gold)}
 .cf{position:fixed;top:-40px;font-size:26px;animation:f 3s linear forwards;pointer-events:none;z-index:4}
 @keyframes f{to{transform:translateY(110vh) rotate(540deg)}}
 @media(prefers-reduced-motion:reduce){.cf{display:none}#toast{transition:none}}
+/* barrier board: 9 cells + 8 grooves per axis */
+.bd{display:grid;grid-template:repeat(8,1fr .5fr) 1fr/repeat(8,1fr .5fr) 1fr;aspect-ratio:1;background:var(--felt2);padding:8px;border-radius:14px;margin-bottom:12px}
+.bc{background:var(--paper);border-radius:6px}
+.bc.go{background:#b8f0d0;box-shadow:inset 0 0 0 2px var(--ink);cursor:pointer}
+.pn{border-radius:50%;margin:10%;display:flex;align-items:center;justify-content:center;color:var(--ink);font-weight:700;border:2px solid #fff;z-index:1;pointer-events:none}
+.bw{background:var(--gold);border-radius:4px;z-index:2;margin:1px}
+.bs{background:rgba(242,182,50,.5);border-radius:4px;cursor:pointer;z-index:3}
+.bs:hover{background:var(--gold)}
+.gl{display:grid;grid-template-columns:1fr 1fr;gap:8px}.gl button{margin:0;padding:10px 6px;font-size:15px}.gp{background:var(--felt);border-radius:8px;padding:8px;text-align:center}
+.mg{grid-template-columns:repeat(4,1fr)}.mg div{font-size:34px}.mg .mt{background:#b8f0d0}.mg .dn{background:var(--felt2);color:var(--mut)}
+.qt{height:220px;font-size:30px;background:var(--dab);color:#fff;margin:10px 0;touch-action:manipulation}.qt.go{background:#2ecc71;color:var(--ink)}.qt.bad{background:var(--mut);color:var(--ink)}
 </style></head>
 <body><div id="app"></div>
 <button id="snd" class="ico" aria-label="Mute sound" aria-pressed="true">🔊</button>
@@ -64,7 +75,7 @@ const R=[0,1,2,3,4],EMO=['👏','😂','😮','🔥'];
 const L=R.flatMap(i=>[R.map(j=>i*5+j),R.map(j=>j*5+i)]).concat([[0,6,12,18,24],[4,8,12,16,20]]);
 const lines=(c,called)=>L.filter(l=>l.every(i=>called.includes(c[i]))).length;
 const code0=(new URLSearchParams(location.search).get('room')||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5);
-let peer,conn,S=null,me=0,isHost=false,G=null,name='',room='',err='',card=Array(25).fill(null),ready=false,sel=null,arm=null;
+let peer,conn,S=null,me=0,isHost=false,G=null,name='',room='',err='',card=Array(25).fill(null),ready=false,sel=null,arm=null,bmode=0;
 let joining=false,jt,codeIn=code0,snd=true,rx=0,ac,tt;
 
 /* ---------- sound / toast / confetti ---------- */
@@ -73,13 +84,64 @@ function toast(r){if(!EMO.includes(r.e))return;const t=$('#toast');t.textContent
 function confetti(){if(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches)return;const E=['🎉','🎊','✨','⭐'];for(let i=0;i<24;i++){const e=document.createElement('span');e.className='cf';e.textContent=E[i%4];e.style.left=Math.random()*96+'vw';e.style.animationDelay=Math.random()*1.2+'s';document.body.appendChild(e);setTimeout(()=>e.remove(),4500)}}
 $('#snd').onclick=e=>{snd=!snd;const b=e.currentTarget;b.textContent=snd?'🔊':'🔇';b.setAttribute('aria-pressed',snd);b.setAttribute('aria-label',snd?'Mute sound':'Unmute sound')};
 
+/* ---------- BARRIER rules (shared by host + client) ---------- */
+/* pos[i]=[row,col]; walls are strings 'h3,4' / 'v3,4' anchored at the top-left of a 2-cell barrier */
+const D4=[[1,0],[-1,0],[0,1],[0,-1]],PC=['#d62a6f','#f2b632','#4cc9f0','#9be564'],GOALS=['top','bottom','right','left'];
+const goal=(i,r,c)=>[r==0,r==8,c==8,c==0][i];
+const can=(W,r,c,a,d)=>{const R2=r+a,C2=c+d;if(R2<0||C2<0||R2>8||C2>8)return 0;
+ if(a){const m=Math.min(r,R2);return!(W.has('h'+m+','+c)||W.has('h'+m+','+(c-1)))}
+ const m=Math.min(c,C2);return!(W.has('v'+r+','+m)||W.has('v'+(r-1)+','+m))};
+const occ=(b,r,c)=>b.pos.some(p=>p&&p[0]==r&&p[1]==c);
+function mv(b,i){const W=new Set(b.W),[r,c]=b.pos[i],o=[];
+ for(const[a,d]of D4){if(!can(W,r,c,a,d))continue;const x=r+a,y=c+d;
+  if(!occ(b,x,y)){o.push([x,y]);continue}
+  if(can(W,x,y,a,d)&&!occ(b,x+a,y+d))o.push([x+a,y+d]);
+  else for(const[e,f]of D4)if(e*a+f*d==0&&can(W,x,y,e,f)&&!occ(b,x+e,y+f))o.push([x+e,y+f])}
+ return o}
+function dist(W,i,s){const q=[[s[0],s[1],0]],v=new Set([s+'']);
+ for(const[r,c,n]of q){if(goal(i,r,c))return n;for(const[a,d]of D4)if(can(W,r,c,a,d)&&!v.has([r+a,c+d]+'')){v.add([r+a,c+d]+'');q.push([r+a,c+d,n+1])}}return 1e9}
+function okW(b,o,r,c){const k=o+r+','+c;if(r<0||c<0||r>7||c>7||b.W.includes(k))return 0;
+ const x=o=='h'?'v':'h',n=o=='h'?[[0,1],[0,-1]]:[[1,0],[-1,0]];
+ if(b.W.includes(x+r+','+c)||n.some(([a,d])=>b.W.includes(o+(r+a)+','+(c+d))))return 0;
+ const W=new Set([...b.W,k]);return b.pos.every((p,i)=>!p||dist(W,i,p)<1e9)}
+
 /* ---------- HOST (runs all game logic) ---------- */
 function fix(c){const seen=new Set();const o=(Array.isArray(c)?c:[]).slice(0,25).map(x=>(seen.has(x)||!(x>=1&&x<=25))?null:(seen.add(x),x));while(o.length<25)o.push(null);const miss=shuf(nums().filter(x=>!seen.has(x)));return o.map(x=>x||miss.pop())}
-function pub(){return{win:G.opt.win,sec:G.opt.sec,pw:G.opt.pw,msg:G.msg,cards:G.phase=='over'?G.players.map(p=>p.card):null,phase:G.phase,called:G.called,turn:G.turn,last:G.last,winners:G.winners,t:G.t,ps:G.players.map(p=>({u:p.u,n:p.name,w:p.w||0,l:G.phase=='lobby'?0:lines(p.card,G.called),r:p.ready,g:p.gone}))}}
+function pub(){return{game:G.cur,list:G.opt.list,T:G.T,idx:G.idx,b:G.cur==1?G.b:null,m:G.cur==2?{v:G.m.c.map((x,i)=>G.m.d[i]||G.m.f.includes(i)?x:null),d:G.m.d,sc:G.m.sc}:null,q:G.cur==3?G.q:null,ts:G.cur==1||G.cur==2?G.opt.sec*2:G.opt.sec,win:G.opt.win,sec:G.opt.sec,pw:G.opt.pw,msg:G.msg,cards:G.phase=='over'?G.players.map(p=>p.card):null,phase:G.phase,called:G.called,turn:G.turn,last:G.last,winners:G.winners,t:G.t,ps:G.players.map(p=>({u:p.u,n:p.name,w:p.w||0,l:G.phase=='lobby'?0:lines(p.card,G.called),r:p.ready,g:p.gone,tp:p.tp||0}))}}
 function bc(){const b=pub();G.players.forEach((p,i)=>{const s={...b,me:i,card:p.card};if(i){if(p.conn.open)p.conn.send({k:'s',s})}else recv(s)})}
 function tick(){G.players.forEach((p,i)=>{if(i){if(p.conn.open)p.conn.send({k:'t',t:G.t})}else setT(G.t)})}
-function finish(ws){G.players.forEach(p=>p.card=fix(p.card));G.winners=ws;ws.forEach(i=>G.players[i].w=(G.players[i].w||0)+1);G.phase='over'}
+function finish(ws){G.players.forEach(p=>p.card=fix(p.card));G.winners=ws;ws.forEach(i=>{G.players[i].w=(G.players[i].w||0)+1;if(G.T)G.players[i].tp=(G.players[i].tp||0)+1});G.phase='over'}
 function startBuild(){G.phase='build';G.t=60;G.called=[];G.last=null;G.winners=[];G.msg='';G.players=G.players.filter(p=>!p.gone);G.players.forEach(p=>{p.card=nums();p.ready=false;p.u='ds'});bc()}
+function startB(){G.phase='play';G.called=[];G.last=null;G.winners=[];G.msg='';G.players=G.players.filter(p=>!p.gone);G.players.forEach(p=>p.card=[]);const n=G.players.length;
+ G.b={pos:[[8,4],[0,4],[4,0],[4,8]].slice(0,n),W:[],wl:G.players.map(()=>n>2?5:10)};G.turn=0;G.t=G.opt.sec*2;bc()}
+const EM8=['🍎','🐸','🚀','🎲','🌈','🐙','🍕','⚽'];
+const prep=()=>{G.phase='play';G.called=[];G.last=null;G.winners=[];G.msg='';G.players=G.players.filter(p=>!p.gone);G.players.forEach(p=>p.card=[]);G.turn=0};
+function begin(){if(G.T&&G.phase=='over'){if(G.idx>=G.opt.list.length-1){G.idx=0;G.players.forEach(p=>p.tp=0)}else G.idx++}G.cur=G.opt.list[G.idx];[startBuild,startB,startM,startQ][G.cur]()}
+/* Memory Match */
+function startM(){prep();G.m={c:shuf([...EM8,...EM8]),d:Array(16).fill(0),f:[],sc:G.players.map(()=>0),k:0};G.t=G.opt.sec*2;bc()}
+function mnext(){const m=G.m;m.f=[];m.k=0;do{G.turn=(G.turn+1)%G.players.length}while(G.players[G.turn].gone);G.t=G.opt.sec*2;bc()}
+function mflip(i,x){const m=G.m;if(m.k||m.d[x]||m.f.includes(x))return;m.f.push(x);G.msg='';if(m.f.length<2)return bc();
+ const[a,b]=m.f;
+ if(m.c[a]==m.c[b]){m.d[a]=m.d[b]=1;m.f=[];m.sc[i]++;G.t=G.opt.sec*2;
+  if(m.d.every(Boolean)){const mx=Math.max(...m.sc);G.msg='All pairs found!';finish(m.sc.map((v,j)=>v==mx?j:-1).filter(j=>j>=0))}
+  bc()}
+ else{m.k=1;bc();setTimeout(()=>{if(G&&G.cur==2&&G.phase=='play'&&G.m===m)mnext()},1200)}}
+/* Quick Tap: 5 rounds, wait for green, first tap scores, early tap locks you out */
+function startQ(){prep();G.q={r:0,st:'',sc:G.players.map(()=>0),x:G.players.map(()=>0),w:-1};qround()}
+function qdone(w){const q=G.q;q.st='done';q.w=w;if(w>=0)q.sc[w]++;bc();setTimeout(()=>{if(G&&G.cur==3&&G.phase=='play'&&G.q===q)qround()},1800)}
+function qround(){const q=G.q;if(q.r>=5){const mx=Math.max(...q.sc);G.msg='';finish(q.sc.map((v,j)=>v==mx?j:-1).filter(j=>j>=0));return bc()}
+ const rr=++q.r;q.st='wait';q.w=-1;q.x=q.x.map(()=>0);G.msg='';bc();
+ setTimeout(()=>{if(G&&G.cur==3&&G.phase=='play'&&G.q===q&&q.r==rr&&q.st=='wait'){q.st='go';bc();setTimeout(()=>{if(G&&G.q===q&&q.r==rr&&q.st=='go'&&G.phase=='play')qdone(-1)},6000)}},2000+Math.random()*3000)}
+function qtap(i){const q=G.q;if(q.x[i]||q.st=='done'||!q.st)return;
+ if(q.st=='go'){G.msg=G.players[i].name+' was fastest!';qdone(i)}
+ else{q.x[i]=1;G.msg=G.players[i].name+' jumped the gun!';if(q.x.every((v,j)=>v||G.players[j].gone)){G.msg='Everyone jumped!';qdone(-1)}else bc()}}
+function auto(g){const c=G.cur;if(c==1)bauto(g);else if(c==2){if(!G.m.k)mnext()}else pick(nums().find(x=>!G.called.includes(x)),g?0:'t')}
+function bend(i){const p=G.b.pos[i];if(p&&goal(i,p[0],p[1])){G.msg=G.players[i].name+' reached the other side!';finish([i]);return bc()}
+ do{G.turn=(G.turn+1)%G.players.length}while(G.players[G.turn].gone);G.t=G.opt.sec*2;bc()}
+function bauto(g){const i=G.turn,b=G.b;G.msg='';
+ if(g)b.pos[i]=null;
+ else{const W=new Set(b.W),m=mv(b,i);if(m.length){m.sort((x,y)=>dist(W,i,x)-dist(W,i,y));b.pos[i]=m[0]}G.msg=G.players[i].name+' ran out of time – auto move'}
+ bend(i)}
 function startPlay(){G.players.forEach(p=>p.card=fix(p.card));const a=G.players.map((p,i)=>i).filter(i=>!G.players[i].gone);G.turn=a[Math.random()*a.length|0];G.t=G.opt.sec;G.phase='play';bc()}
 function pick(n,pu){const who=G.turn,P=G.players[who];G.called.push(n);G.last=n;
  G.msg=pu=='d'?P.name+' used ⚡ Double call':pu=='s'?P.name+' used 🧊 Skip':pu=='t'?P.name+' ran out of time – random number':'';
@@ -90,19 +152,24 @@ function pick(n,pu){const who=G.turn,P=G.players[who];G.called.push(n);G.last=n;
 function act(i,m){const p=G.players[i];
  if(m.k=='r'){if(!EMO.includes(m.e)||Date.now()-(p.rt||0)<1000)return;p.rt=Date.now();const r={k:'r',n:p.name,e:m.e};G.players.forEach((q,j)=>{if(j){if(!q.gone&&q.conn.open)q.conn.send(r)}else toast(r)})}
  else if(m.k=='c'&&G.phase=='build'){p.card=m.card;p.ready=!!m.r&&Array.isArray(m.card)&&m.card.every(Boolean);bc();if(G.players.every(q=>q.ready||q.gone))startPlay()}
- else if(m.k=='p'&&G.phase=='play'&&G.turn==i&&m.n>=1&&m.n<=25&&!G.called.includes(m.n)){const u=G.opt.pw&&['d','s'].includes(m.u)&&p.u.includes(m.u)?m.u:null;if(u)p.u=p.u.replace(u,'');pick(m.n,u)}
- else if(m.k=='go'&&i==0&&G.phase=='lobby'&&G.players.length>1)startBuild();
+ else if(m.k=='p'&&G.phase=='play'&&G.cur==0&&G.turn==i&&m.n>=1&&m.n<=25&&!G.called.includes(m.n)){const u=G.opt.pw&&['d','s'].includes(m.u)&&p.u.includes(m.u)?m.u:null;if(u)p.u=p.u.replace(u,'');pick(m.n,u)}
+ else if(m.k=='bm'&&G.phase=='play'&&G.cur==1&&G.turn==i&&mv(G.b,i).some(([r,c])=>r===m.r&&c===m.c)){G.msg='';G.b.pos[i]=[m.r,m.c];bend(i)}
+ else if(m.k=='bw'&&G.phase=='play'&&G.cur==1&&G.turn==i&&G.b.wl[i]>0&&(m.o=='h'||m.o=='v')&&Number.isInteger(m.r)&&Number.isInteger(m.c)&&okW(G.b,m.o,m.r,m.c)){G.msg=p.name+' placed a barrier 🧱';G.b.W.push(m.o+m.r+','+m.c);G.b.wl[i]--;bend(i)}
+ else if(m.k=='tg'&&i==0&&G.phase=='lobby'&&[0,1,2,3].includes(m.g)){const l=G.opt.list,x=l.indexOf(m.g);if(x<0)l.push(m.g);else if(l.length>1)l.splice(x,1);bc()}
+ else if(m.k=='mf'&&G.phase=='play'&&G.cur==2&&G.turn==i&&Number.isInteger(m.x)&&m.x>=0&&m.x<16){mflip(i,m.x)}
+ else if(m.k=='qt'&&G.phase=='play'&&G.cur==3){qtap(i)}
+ else if(m.k=='go'&&i==0&&G.phase=='lobby'&&G.players.length>1){G.T=G.opt.list.length>1;G.idx=0;G.players.forEach(p=>p.tp=0);begin()}
  else if(m.k=='o'&&i==0&&G.phase=='lobby'&&({win:[3,5],sec:[8,15],pw:[0,1]})[m.o]?.includes(m.v)){G.opt[m.o]=m.v;bc()}
- else if(m.k=='again'&&i==0&&G.phase=='over')startBuild()}
+ else if(m.k=='again'&&i==0&&G.phase=='over')begin()}
 setInterval(()=>{if(!isHost||!G)return;
  if(G.phase=='build'||G.phase=='play'){
   if(G.players.filter(p=>!p.gone).length<2){G.msg='Everyone else left the game.';finish([0]);return bc()}}
  if(G.phase=='build'){if(--G.t<=0)startPlay();else tick()}
- else if(G.phase=='play'){const gone=G.players[G.turn].gone;if(gone||--G.t<=0)pick(nums().find(x=>!G.called.includes(x)),gone?0:'t');else tick()}},1000);
+ else if(G.phase=='play'&&G.cur!=3){const gone=G.players[G.turn].gone;if(gone||--G.t<=0)auto(gone);else tick()}},1000);
 function watch(){clearTimeout(jt);jt=setTimeout(()=>{if(!S)fail('Could not connect. Check your connection and the room code, then try again.')},12000)}
 function host(){isHost=true;joining=true;room=(Math.random().toString(36)+'00000').slice(2,7).toUpperCase();
  peer=new Peer('bingo-'+room);watch();
- peer.on('open',()=>{G={opt:{win:5,sec:15,pw:1},msg:'',phase:'lobby',players:[{name,card:[],ready:false}],called:[],turn:0,t:0,last:null,winners:[]};bc()});
+ peer.on('open',()=>{G={opt:{win:5,sec:15,pw:1,list:[0]},cur:0,idx:0,msg:'',phase:'lobby',players:[{name,card:[],ready:false}],called:[],turn:0,t:0,last:null,winners:[]};bc()});
  peer.on('disconnected',()=>{try{peer.reconnect()}catch(e){}});
  peer.on('connection',c=>{
   c.on('data',m=>{if(!G)return;const i=G.players.findIndex(p=>p.conn===c);
@@ -112,7 +179,7 @@ function host(){isHost=true;joining=true;room=(Math.random().toString(36)+'00000
     const b=String(m.n||'Player').trim().slice(0,10)||'Player';let n=b,k=2;while(G.players.some(p=>p.name==n))n=b+' '+k++;
     G.players.push({name:n,conn:c,card:[],ready:false});bc()}
    else if(i>0&&m)act(i,m)});
-  c.on('close',()=>{if(!G)return;const i=G.players.findIndex(p=>p.conn===c);if(i<1)return;if(G.phase=='lobby')G.players.splice(i,1);else G.players[i].gone=true;
+  c.on('close',()=>{if(!G)return;const i=G.players.findIndex(p=>p.conn===c);if(i<1)return;if(G.phase=='lobby')G.players.splice(i,1);else{G.players[i].gone=true;if(G.cur==1&&G.b)G.b.pos[i]=null}
    if(G.phase=='build'&&G.players.filter(q=>!q.gone).length>1&&G.players.every(q=>q.ready||q.gone))startPlay();else bc()})});
  peer.on('error',e=>{if(e.type=='unavailable-id'){peer.destroy();host()}else fail('Could not create room ('+e.type+'). Check your connection.')})}
 
@@ -125,23 +192,59 @@ function join(c){isHost=false;joining=true;room=c.toUpperCase();peer=new Peer();
  peer.on('error',e=>fail(e.type=='peer-unavailable'?'Room not found. Check the code.':'Connection problem ('+e.type+').'))}
 const send=m=>isHost?act(0,m):conn&&conn.open&&conn.send(m);
 function fail(m){clearTimeout(jt);joining=false;err=m;S=null;G=null;isHost=false;const p=peer;peer=null;conn=null;try{p.destroy()}catch(e){}render()}
-function recv(s){const pp=S&&S.phase,pt=S&&S.turn,pl=S&&S.last;if(pt!=s.turn)arm=null;S=s;me=s.me;joining=false;clearTimeout(jt);
+function recv(s){const pp=S&&S.phase,pt=S&&S.turn,pl=S&&S.last;if(pt!=s.turn)arm=null;if(pt!=s.turn||pp!=s.phase)bmode=0;S=s;me=s.me;joining=false;clearTimeout(jt);
  if(s.phase=='build'&&pp!='build'){card=s.card.slice();ready=false;sel=null}
  if(s.phase=='play'&&s.turn==me&&(pp!='play'||pt!=s.turn)){if(navigator.vibrate)navigator.vibrate(200);beep(880)}
  else if(s.phase=='play'&&s.last!=null&&s.last!=pl)beep(520,.08);
  if(s.phase=='over'&&pp!='over'){if(s.winners.includes(me)){beep(1040,.35);confetti()}else beep(300,.3)}
  render()}
-function setT(t){if(!S)return;S.t=t;const m=S.phase=='build'?60:S.sec,e=$('#tm'),b=$('#bar');if(e)e.textContent=t+'s';if(b){b.style.width=t/m*100+'%';b.className=t<=5?'low':''}}
+function setT(t){if(!S)return;S.t=t;const m=S.phase=='build'?60:S.ts,e=$('#tm'),b=$('#bar');if(e)e.textContent=t+'s';if(b){b.style.width=t/m*100+'%';b.className=t<=5?'low':''}}
 const push=()=>{send({k:'c',card:card.slice(),r:ready});render()};
 
 /* ---------- UI ---------- */
 const lt=p=>`<span class=let>${[...'BINGO'.slice(0,S.win)].map((c,k)=>`<b class="${k<p.l?'on':''}">${c}</b>`).join('')}</span>`;
 const gh=(c,mine,cls)=>{const d=new Set(L.filter(l=>l.every(i=>S.called.includes(c[i]))).flat());return`<div class="grid ${cls||''}">${c.map((n,i)=>{const m=S.called.includes(n),k=mine&&!m;return`<div ${k?`data-a=pick data-v=${n} tabindex=0 role=button aria-label="Number ${n}"`:''} class="${m?'m':''} ${d.has(i)?'d':''} ${k?'can':''} ${m&&n==S.last?'l':''}">${n}</div>`}).join('')}</div>`};
+function bUI(T,nm,leave){const b=S.b,over=S.phase=='over',mine=S.turn==me&&!over,W=S.winners;
+ const hd=over?`<div class=box style="text-align:center;font-size:24px">${W.includes(me)?'🏆 You win!':'🏁 '+esc(S.ps[W[0]].n)+' wins!'}</div>`
+  :T(mine?'Your turn: move your pawn or place a barrier.':esc(S.ps[S.turn].n)+' is thinking…');
+ const mvs=mine&&!bmode?mv(b,me):[];let h='';
+ for(let r=0;r<9;r++)for(let c=0;c<9;c++){const g=mvs.some(m=>m[0]==r&&m[1]==c);
+  h+=`<div class="bc${g?' go':''}" style="grid-area:${2*r+1}/${2*c+1}" ${g?`data-a=bmv data-v=${r},${c} tabindex=0 role=button aria-label="Move to row ${r+1}, column ${c+1}"`:''}></div>`}
+ b.pos.forEach((p,i)=>{if(p)h+=`<div class=pn style="grid-area:${2*p[0]+1}/${2*p[1]+1};background:${PC[i]}">${i==me?'★':''}</div>`});
+ b.W.forEach(k=>{const o=k[0],[r,c]=k.slice(1).split(',').map(Number);h+=`<div class=bw style="grid-area:${o=='h'?`${2*r+2}/${2*c+1}/span 1/span 3`:`${2*r+1}/${2*c+2}/span 3/span 1`}"></div>`});
+ if(mine&&bmode&&b.wl[me]>0){const o=bmode==1?'h':'v';for(let r=0;r<8;r++)for(let c=0;c<8;c++)if(okW(b,o,r,c))
+  h+=`<div class=bs data-a=bwl data-v=${o}${r},${c} tabindex=0 role=button aria-label="Place barrier at row ${r+1}, column ${c+1}" style="grid-area:${o=='h'?`${2*r+2}/${2*c+1}/span 1/span 2`:`${2*r+1}/${2*c+2}/span 2/span 1`}"></div>`}
+ const ctl=mine?`<div class=row>${[[0,'🚶 Move'],[1,'━ Barrier'],[2,'┃ Barrier']].map(([k,t])=>`<button class="g${bmode==k?' on':''}" data-a=bmode data-v=${k} ${k&&!b.wl[me]?'disabled':''}>${t}</button>`).join('')}</div>`
+  +(bmode?`<p class=s style="margin:8px 0 0">Tap a glowing slot between squares to block the way.</p>`:''):'';
+ A.innerHTML=hd+`<div class=box>${S.ps.map((p,i)=>`<div class=pl><span style="color:${PC[i]}">● ${nm(i)}${i==me?' (you)':''}${p.g?' – left':''}${!over&&i==S.turn?' ◀':''}</span><span>🧱 ${p.g?0:b.wl[i]}</span></div>`).join('')}</div>`
+  +(S.msg?`<p class=s>${esc(S.msg)}</p>`:'')+ctl+`<p class=s style="margin-top:10px">Your pawn ★ must reach the ${GOALS[me]} edge.</p><div class=bd>${h}</div>`
+  +(over?'':`<div class="row react">${EMO.map(e=>`<button class=g data-a=react data-v=${e} aria-label="React ${e}">${e}</button>`).join('')}</div>`)
+  +endUI(over,leave);
+ if(!over)setT(S.t)}
+const GM=['🎯 Bingo','🧱 Barrier','🧠 Memory','⚡ Quick Tap'];
+const rxb=over=>over?'':`<div class="row react">${EMO.map(e=>`<button class=g data-a=react data-v=${e} aria-label="React ${e}">${e}</button>`).join('')}</div>`;
+const wtxt=()=>S.winners.includes(me)?(S.winners.length>1?'🏆 You tied for the win!':'🏆 You win!'):'🏁 '+S.winners.map(i=>esc(S.ps[i].n)).join(' & ')+(S.winners.length>1?' tie!':' wins!');
+function endUI(over,leave){if(!over)return'';const n=S.list.length,last=S.idx>=n-1;let h='';
+ if(S.T){const mx=Math.max(...S.ps.map(p=>p.tp)),ch=S.ps.filter(p=>p.tp==mx);h=`<div class="box${last?' win':''}"><p class=lb>🏆 Tournament · game ${S.idx+1} of ${n}</p>${last?`<p style="font-size:22px;text-align:center;margin:6px 0">👑 ${ch.map(p=>esc(p.n)).join(' & ')} ${ch.length>1?'share':'takes'} the trophy!</p>`:''}${S.ps.map(p=>`<div class=pl><span>${esc(p.n)}${p.g?' – left':''}</span><b>${p.tp} pt${p.tp==1?'':'s'}</b></div>`).join('')}</div>`}
+ return h+(me==0?`<button data-a=again>${S.T?(last?'Play tournament again':'Next: '+GM[S.list[S.idx+1]]):'Play again'}</button>`:`<p class=s>Waiting for the host…</p>`)+leave}
+function mUI(T,nm,leave){const m=S.m,over=S.phase=='over',mine=S.turn==me&&!over;
+ A.innerHTML=(over?`<div class=box style="text-align:center;font-size:24px">${wtxt()}</div>`:T(mine?'Your turn: flip two cards.':esc(S.ps[S.turn].n)+' is flipping…'))
+ +`<div class=box>${S.ps.map((p,i)=>`<div class=pl><span>${!over&&i==S.turn?'▶ ':''}${nm(i)}${i==me?' (you)':''}${p.g?' – left':''}</span><b>${m.sc[i]} pair${m.sc[i]==1?'':'s'}</b></div>`).join('')}</div>`
+ +(S.msg?`<p class=s>${esc(S.msg)}</p>`:'')
+ +`<div class="grid mg">${m.v.map((v,i)=>{const up=v!=null,k=mine&&!up;return`<div ${k?`data-a=mf data-v=${i} tabindex=0 role=button aria-label="Card ${i+1}"`:''} class="${up?(m.d[i]?'mt':'s1'):'dn'}">${up?v:'?'}</div>`}).join('')}</div>`
+ +`<div style="height:12px"></div>`+rxb(over)+endUI(over,leave);
+ if(!over)setT(S.t)}
+function qUI(nm,leave){const q=S.q,over=S.phase=='over',x=q.x[me],st=q.st;
+ const txt=st=='go'?'TAP NOW!':st=='done'?(q.w>=0?esc(S.ps[q.w].n)+' got it!':'No winner this round'):x?'Too early! Wait…':'Wait for green…';
+ A.innerHTML=`<p class=s style="margin-top:20px">${over?'Quick Tap · final':'Quick Tap · round '+q.r+' of 5'}</p>`
+ +(over?`<div class=box style="text-align:center;font-size:24px">${wtxt()}</div>`:`<button class="qt${st=='go'?' go':x?' bad':''}" data-a=qt>${txt}</button>`)
+ +`<div class=box style="margin-top:12px">${S.ps.map((p,i)=>`<div class=pl><span>${nm(i)}${i==me?' (you)':''}${p.g?' – left':''}</span><b>${q.sc[i]} ⚡</b></div>`).join('')}</div>`
+ +(S.msg&&!over?`<p class=s>${esc(S.msg)}</p>`:'')+rxb(over)+endUI(over,leave)}
 function render(){
  if(!S){const b=joining?'disabled':'';
   const J=`<div class=box><label class=lb for=cd>Room code</label><input id=cd placeholder="e.g. AB12C" maxlength=40 value="${esc(codeIn)}" style="text-transform:uppercase" autocomplete=off><button class="${code0?'':'g'}" data-a=join ${b}>Join a room</button></div>`,
   C=`<div class=box><button class="${code0?'g':''}" data-a=create ${b}>Create a new room</button></div>`;
-  A.innerHTML=`<h1>🎯 Bingo</h1><p class=s>2–4 players. Build a card, call numbers, race to five lines.</p>
+  A.innerHTML=`<h1>🎯🧱 Game Night</h1><p class=s>2–4 players. Pick games, or build a tournament, in the lobby.</p>
   <div class=box>${err?`<p role=alert style="color:#ff9ab9;margin-bottom:8px">${esc(err)}</p>`:''}<label class=lb for=nm>Your name</label><input id=nm placeholder="Enter your name" maxlength=12 value="${esc(name)}" autocomplete=nickname></div>`+(code0?J+C:C+J)+(joining?`<p class=s role=status>Connecting…</p>`:'');return}
  const ph=S.phase,nm=i=>esc(S.ps[i].n)+(S.ps[i].w?` · 🏆${S.ps[i].w}`:''),
  plist=S.ps.map((p,i)=>`<div class=pl><span>${ph=='play'&&i==S.turn?'▶ ':''}${nm(i)}${i==me?' (you)':''}${p.g?' – left':''}${ph=='play'&&S.pw?(p.u||'').replace('d','⚡').replace('s','🧊'):''}${ph=='build'&&p.r?' ✔':''}</span>${ph=='lobby'?'':lt(p)}</div>`).join('');
@@ -151,7 +254,8 @@ function render(){
  if(ph=='lobby'){
   const link=location.origin+location.pathname+'?room='+room;
   A.innerHTML=`<h1>Room</h1><div class=box><div class=code>${room}</div><button class=g data-a=copy data-v="${esc(link)}">${navigator.share?'Share invite link':'Copy invite link'}</button></div>
-  <div class=box>${plist}</div><div class=box>${o('win','Lines to win',[[3,'3 Quick'],[5,'5 Classic']])}${o('sec','Turn timer',[[8,'8s Speed'],[15,'15s']])}${o('pw','Power-ups ⚡🧊',[[1,'On'],[0,'Off']])}</div>`+(me==0?`<button data-a=go ${S.ps.length<2?'disabled':''}>Start game (${S.ps.length}/4)</button>`:`<p class=s>Waiting for the host to start…</p>`)+leave;return}
+  <div class=box>${plist}</div><div class=box><p class=lb>Pick games. Tap several for a tournament (played in the order picked).</p><div class=gl>${GM.map((g,k)=>{const x=S.list.indexOf(k),lb=(x>=0&&S.list.length>1?(x+1)+'. ':'')+g;return me?(x>=0?`<span class=gp>${lb}</span>`:''):`<button class="g${x>=0?' on':''}" data-a=tg data-v=${k}>${lb}</button>`}).join('')}</div><p class=s style="margin:8px 0 0">${S.list.length>1?'🏆 Tournament: '+S.list.length+' games, one point per game win':'Single game'}</p></div>${S.list.some(g=>g<3)?`<div class=box>${S.list.includes(0)?o('win','Lines to win',[[3,'3 Quick'],[5,'5 Classic']]):''}${o('sec','Turn timer'+(S.list.some(g=>g==1||g==2)?' (×2 in Barrier/Memory)':''),[[8,'8s Speed'],[15,'15s']])}${S.list.includes(0)?o('pw','Power-ups ⚡🧊',[[1,'On'],[0,'Off']]):''}</div>`:''}`+(me==0?`<button data-a=go ${S.ps.length<2?'disabled':''}>Start game (${S.ps.length}/4)</button>`:`<p class=s>Waiting for the host to start…</p>`)+leave;return}
+ if(S.game==1)return bUI(T,nm,leave);if(S.game==2)return mUI(T,nm,leave);if(S.game==3)return qUI(nm,leave);
  if(ph=='build'){
   const full=card.every(Boolean);
   A.innerHTML=T(ready?'Waiting for others…':'Build your card: tap a cell, then a number. Tap two cells to swap.')+
@@ -168,7 +272,7 @@ function render(){
  (over?wc+(oc?`<p class=s>Other cards</p>`+oc:''):gh(S.card,mine))+
  `<div class=box style="margin-top:12px">Last called: <b class=big>${S.last??'–'}</b><div class=chips>${S.called.map(n=>`<span>${n}</span>`).join('')}</div></div>`+
  (over?'':`<div class="row react">${EMO.map(e=>`<button class=g data-a=react data-v=${e} aria-label="React ${e}">${e}</button>`).join('')}</div>`)+
- (over?(me==0?`<button data-a=again>Play again</button>`:`<p class=s>Waiting for the host to start a rematch…</p>`)+leave:'');
+ endUI(over,leave);
  if(!over)setT(S.t)}
 
 function doCreate(){if(joining||peer)return;name=name.trim()||'Host';err='';host();render()}
@@ -177,6 +281,7 @@ A.oninput=e=>{if(e.target.id=='nm')name=e.target.value;else if(e.target.id=='cd'
 A.onkeydown=e=>{const t=e.target;
  if(e.key=='Enter'&&!S&&t.tagName=='INPUT'){e.preventDefault();(t.id=='cd'||codeIn.trim())?doJoin():doCreate()}
  else if((e.key=='Enter'||e.key==' ')&&t.matches&&t.matches('div[data-a]')){e.preventDefault();t.click()}};
+A.onpointerdown=e=>{if(e.target.closest('[data-a=qt]'))send({k:'qt'})};
 A.onclick=e=>{const t=e.target.closest('[data-a]');if(!t||t.disabled)return;const a=t.dataset.a,v=t.dataset.v,n=+v;
  if(a=='create')doCreate();
  else if(a=='join')doJoin();
@@ -184,9 +289,15 @@ A.onclick=e=>{const t=e.target.closest('[data-a]');if(!t||t.disabled)return;cons
  else if(a=='opt')send({k:'o',o:t.dataset.k,v:n});
  else if(a=='arm'){arm=arm==v?null:v;render()}
  else if(a=='again')send({k:'again'});
+ else if(a=='bmode'){bmode=n;render()}
+ else if(a=='tg')send({k:'tg',g:n});
+ else if(a=='mf')send({k:'mf',x:n});
+ else if(a=='qt'){if(!e.detail)send({k:'qt'})}
+ else if(a=='bmv'){const[r,c]=v.split(',').map(Number);send({k:'bm',r,c})}
+ else if(a=='bwl'){const[r,c]=v.slice(1).split(',').map(Number);bmode=0;send({k:'bw',o:v[0],r,c})}
  else if(a=='leave')fail('');
  else if(a=='react'){if(Date.now()-rx>1000){rx=Date.now();send({k:'r',e:v})}}
- else if(a=='copy'){if(navigator.share)navigator.share({title:'Bingo',text:'Join my Bingo room '+room,url:v}).catch(()=>{});else(navigator.clipboard?navigator.clipboard.writeText(v):Promise.reject()).then(()=>t.textContent='Copied ✔',()=>t.textContent='Share code: '+room)}
+ else if(a=='copy'){if(navigator.share)navigator.share({title:'Game Night',text:'Join my game room '+room,url:v}).catch(()=>{});else(navigator.clipboard?navigator.clipboard.writeText(v):Promise.reject()).then(()=>t.textContent='Copied ✔',()=>t.textContent='Share code: '+room)}
  else if(a=='rdy'){ready=!ready;sel=null;push()}
  else if(S&&S.phase=='build'&&!ready){
   if(a=='cell'){if(sel==null)sel=n;else if(sel==n)sel=null;else{[card[sel],card[n]]=[card[n],card[sel]];sel=null;push();return}render()}
